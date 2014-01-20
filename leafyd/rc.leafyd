@@ -1,0 +1,40 @@
+#!/usr/bin/env perl
+
+use LeafyWeb;
+my $lfy = new LeafyWeb;
+
+print "LeafyWeb v" . $lfy->lfy_version . "\n(c) 2008 the mg2 organization, All rights reserved\n\n";
+
+if ($ARGV[0] eq "start") {
+    if (-e "$ENV{LEAFYD_ROOT}/.leafyd.pid") {
+        open(PID, '<', "$ENV{LEAFYD_ROOT}/.leafyd.pid");
+        my $pid = <PID>;
+        close(PID);
+        die "leafyd already running as $pid!\n";
+    } else {
+        system("$ENV{LEAFYD_ROOT}/leafyd");
+    }
+} elsif ($ARGV[0] eq "stop") {
+    if (-e "$ENV{LEAFYD_ROOT}/.leafyd.pid") {
+        open(PID, '<', "$ENV{LEAFYD_ROOT}/.leafyd.pid");
+        my $pid = <PID>;
+        close(PID);
+        unlink("$ENV{LEAFYD_ROOT}/.leafyd.pid");
+        kill("QUIT", $pid);
+    } else {
+        die "No pid file found!\n";
+    }
+
+} elsif ($ARGV[0] eq "restart") {
+    if (-e "$ENV{LEAFYD_ROOT}/.leafyd.pid") {
+        open(PID, '<', "$ENV{LEAFYD_ROOT}/.leafyd.pid");
+        my $pid = <PID>;
+        close(PID);
+        unlink("$ENV{LEAFYD_ROOT}/.leafyd.pid");
+        kill("QUIT", $pid);
+        sleep(1);
+        system("$ENV{LEAFYD_ROOT}/leafyd");
+    } else {
+        die "No pid file found!\n";
+    }
+}

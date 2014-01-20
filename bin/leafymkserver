@@ -1,0 +1,37 @@
+#!/usr/bin/env perl
+
+die "Usage: leafymkserver <directory>\n" unless $ARGV[0];
+
+my $leafy_info_templ = <<"EOF";
+---
+aka:
+  - unnamed_server
+description: A server that someone never renamed
+implementation: newb
+maintainer: Author Joe <author\@joe.com>
+name: freebsd_i386_a22_php_2.2.12
+source: 'true'
+type: server
+version: 2.2.12
+EOF
+
+my $build_sh_templ = <<"EOF";
+#!/bin/sh
+
+echo "==build script [% package.name %]=="
+echo "I don't know how to build anything yet for [% package.name %]";
+EOF
+
+mkdir($ARGV[0]);
+mkdir($ARGV[0] . "/src");
+mkdir($ARGV[0] . "/meta");
+
+# populate leafy_info
+open(LEAFYINFO, ">", "$ARGV[0]/.leafy_info");
+print LEAFYINFO $leafy_info_templ;
+close(LEAFYINFO);
+
+# populate build.sh
+open(BUILD, '>', "$ARGV[0]/meta/build.sh");
+print BUILD $build_sh_templ;
+close(BUILD);

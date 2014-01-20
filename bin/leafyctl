@@ -1,0 +1,52 @@
+#!/usr/bin/env perl
+
+use LeafyWeb::LeafyD::Entry;
+use LeafyWeb::Site;
+use LeafyWeb;
+
+#
+# Usage: leafyctl <stop/start/restart> <uri>
+#
+
+my $command = $ARGV[0];
+my $uri = $ARGV[1];
+
+die "Usage: leafyctl <stop/start/restart/check_config> <uri>\n" unless $command;
+die "[error]: only root can run leafyctl $command\n" unless $uri or $> == 0;
+
+# instantiate a leafyweb <3
+my $lfy = LeafyWeb->new();
+my ($site, $location) = $lfy->parse_uri($uri);
+
+unless ($site) {
+    ($site, $location) = $lfy->parse_uri("http://" . $uri);
+}
+
+my $sobj = LeafyWeb::Site->new($site);
+
+unless ($site) {
+    die "I tried $uri, i tried http://$uri, I'm done with you.\n";
+}
+
+if ($sobj) {
+    if ($command =~ /^(?:stop|start|restart|check_config)$/) {
+        my $entry = LeafyWeb::LeafyD::Entry->new();
+        my $seqno = $entry->internal_seqno;
+        $entry->add(
+            subeventtype            =>          $command,
+            site                    =>          $site,
+            location                =>          $location,
+            seqno                   =>          $seqno,
+        );
+        $entry->write_to_queue;
+        print "[status] queued $command event for $uri ($seqno)\n";
+        until (`$ENV{LEAFY_ROOT}/bin/seqno_status.pl $seqno` =~ /(?:completed|failed)/i) {
+            sleep 1;
+        }
+        system("$ENV{LEAFY_ROOT}/bin/seqno_status.pl -v $seqno");
+    } else {
+        die "[error] invalid command $command\n";
+    }
+} else {
+    die "[error] site name $site did not check out\n";
+}

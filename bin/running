@@ -1,0 +1,36 @@
+#!/usr/bin/env perl
+
+unless ($ARGV[0]) {
+    die "Usage: running <uri>\n";
+}
+
+my ($site, $location) = parse_uri($ARGV[0]);
+
+use LeafyWeb::Site;
+foreach my $ret (LeafyWeb::Site->new($site)->running($location)) {
+    my ($server, $running, $pid, $serving) = split(/:/, $ret);
+    if ($running) {
+        if ($serving) {
+            print "LeafyServer $server is running as PID $pid, serving $serving\n";
+        } else {
+            print "LeafyCore $server is running as PID $pid\n";
+        }
+    } else {
+        if ($pid) {
+            print "LeafyServer $server SHOULD be running as PID $pid, but isn't\n";
+        } else {
+            print "LeafyServer $server is not running\n";
+        }
+    }
+}
+
+# parse dat uri
+sub parse_uri {
+    my ($uri) = @_;
+    if ($uri =~ /^http[s]?:\/\/([^\/]+)(.*?)\/*$/) {
+        return ($1, $2);
+    } elsif ("http://$uri" =~ /^http[s]?:\/\/([^\/]+)(.*?)\/*$/) {
+        return ($1, $2);
+    }
+    return undef;
+}

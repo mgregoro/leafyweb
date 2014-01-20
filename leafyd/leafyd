@@ -1,0 +1,466 @@
+#!/usr/bin/env perl
+#
+# $Id: $
+#
+# leafyd - The LeafyWeb Daemon
+# (c) 2000-2006 Michael Gregorowicz
+#               the mg2 organization
+#
+#------------------------------------------
+#
+
+use lib($ENV{LEAFY_ROOT} . "/lib");
+
+use LeafyWeb::LeafyD;
+use Time::HiRes;
+use IO::Select;
+
+my $lfy = LeafyWeb::LeafyD->new();
+
+# different behaviors.
+my ($s);
+
+# this has to be a global thats subroutines can read / write.
+our ($bcode);
+if ($lfy->c->CACHE_BYTECODE) {
+    $bcode = {};
+} else {
+    $s = IO::Select->new();
+}
+
+# set a few global / constant variables here
+my $num_procs = $lfy->c->NUM_PROCS;
+my $gci = $lfy->c->GLOBAL_CHECK_INTERVAL;
+my $dh = $lfy->c->LEAFYD_DEFAULT_HANDLER;
+my $qb = $lfy->c->LEAFYD_QUEUE_BASE;
+my @queues = @{$lfy->c->QUEUES};
+
+# so we don't have to query the files every time
+my %queue_last_run;
+
+# keeps track of which SEQNOs are running
+my %entry_is_running;
+
+# keeps track of which UNIQUEIDs are running (the same uniqueid shouldnt run concurrently)
+my %uid_is_running;
+
+# keeps track of what FILE the SEQNOs are running against
+my %file_is_running;
+
+# keeps track of what offset we went to in the queue
+my %queue_process_offset;
+
+# indicates if we should stop waiting for database write out
+my $stop_waiting = 0;
+
+# stdout debug level..
+my $debug = 0;
+
+# beware, i temporarily suspended belief in subroutines!
+
+# we daemonize
+if (my $pid = fork()) {
+    exit();
+} elsif ($pid == 0) {
+    open(PID, '>', $lfy->c->PID_FILE);
+    print PID $$;
+    close(PID);
+
+    # set the status to normal
+    $lfy->s->{leafyd_status} = "NORMAL";
+    $lfy->save_status;
+
+    print "[leafyd]: Startup watching " . scalar(@queues) . " queues. Pid: $$\n";
+
+    $SIG{QUIT} = \&shutdown;
+    $SIG{USR2} = \&done;
+    $SIG{HUP} = \&reload_config;
+    #$SIG{USR1} = \&reload_data;
+
+    while (1) {
+        my $pre_time = time;
+        foreach my $queue (@queues) {
+            my $qci_method = uc($queue . "_interval");
+            my $qci = $lfy->c->$qci_method;
+
+            if ($queue_last_run{$queue}) {
+                # make sure we waited the right amount of time...
+                if (time - $queue_last_run{$queue} < $qci) {
+                    next;
+                } else {
+                    my @entries = $lfy->all_in_queue($qb . "/$queue");
+
+                    # skip an empty queue.
+                    next unless scalar(@entries) > 0;
+
+                    # iterate here! entries must be READ ONLY (i should enforce this)
+                    # do the first CHUNK_SIZE entries..
+                    my $ent_last_index = $#entries > $lfy->c->CHUNK_SIZE ? $lfy->c->CHUNK_SIZE + $queue_process_offset{$queue} : $#entries;
+                    
+                    # get the first index so we can move on in a stagnant queue w/o the entries leaving the queue.
+                    # useful for expire processing.
+                    my $ent_first_index = $queue_process_offset{$queue} ? $queue_process_offset{$queue} : 0;
+                    if ($ent_first_index > $#entries || $ent_last_index > $#entries) {
+                        # rewind it!
+                        $ent_first_index = 0;
+                        $ent_last_index = $#entries > $lfy->c->CHUNK_SIZE ? $lfy->c->CHUNK_SIZE : $#entries;
+                        $queue_process_offset{$queue} = $lfy->c->CHUNK_SIZE;
+                    } else {
+                        $queue_process_offset{$queue} = $ent_first_index + $lfy->c->CHUNK_SIZE;
+                    }
+
+                    # do them all if this is a destination queue!
+                    $ent_last_index = $#entries if $queue =~ /^TO_/o;
+                    $ent_first_index = 0 if $queue =~ /^TO_/o;
+
+                    foreach my $entry (@entries[$ent_first_index..$ent_last_index]) {
+                        # skip if $entry is not true
+                        next unless $entry;
+                        if ($lfy->c->CACHE_BYTECODE) {
+                            # non forking / single process code...
+                            my $qh_method = uc($queue . "_handler");
+                            my $qh = $lfy->c->$qh_method;
+
+                            my $return;
+
+                            if ($qh) {
+                                $return = call_handler($qh, $entry->get_value('LeafyDfromFile'));
+                            } else {
+                                $return = call_handler($dh, $entry->get_value('LeafyDfromFile'));
+                            }
+
+
+                            # don't have to worry about the is_running stuff since its all serialized.
+                            # but cos im lazy and dont want to handle more exceptions..
+                            $entry_is_running{$entry->get_value('seqno')} = $queue;
+                            $uid_is_running{$entry->get_value('uniqueid')} = $queue;
+                            $file_is_running{$entry->get_value('seqno')} = $entry->get_value('LeafyDfromFile');
+
+                            my ($status, $seqno, $info) = $return =~ /^([A-Z]+)\s*:\s*\[([A-Z0-9]+)\]\s*(.+)[\r\n]*$/o;
+                            chomp($info);
+                            reap_process(undef, $status, $seqno, $info);
+                        } else {
+                            my $started = 0;
+                            until ($started) {
+                                # check if we can start the dispatch handler.
+                                if (scalar($s->handles) < $num_procs) {
+                                    # we can start the process - but make sure we aren't already running one for this..
+                                    if ($entry_is_running{$entry->get_value('seqno')}) {
+                                        # this entry is already running. - skip out of the until() for this pass
+                                        last;
+                                    } elsif ($uid_is_running{$entry->get_value('uniqueid')}) { 
+                                        # this unique id is already running. - skip out of the until() for this pass
+                                        last;
+                                    } else {
+                                        my $qh_method = uc($queue . "_handler");
+                                        my $qh = $lfy->c->$qh_method;
+                                        my $run;
+                                        if ($qh) {
+                                            # queue (specific) handler
+                                            open($run, '-|', $qh . " " . $entry->get_value('LeafyDfromFile')) or warn "Can't run $qh: $!";
+                                        } else {
+                                            # default handler
+                                            open($run, '-|', $dh . " " . $entry->get_value('LeafyDfromFile')) or warn "Can't run $dh: $!";
+                                        }
+                                        $s->add($run);
+                                        $lfy->log("Starting dispatch handler for queue $queue. Sequence Number: " . $entry->get_value('seqno'));
+                                        $entry_is_running{$entry->get_value('seqno')} = $queue;
+                                        $file_is_running{$entry->get_value('seqno')} = $entry->get_value('LeafyDfromFile');
+                                        $uid_is_running{$entry->get_value('uniqueid')} = $queue;
+                                        $started = 1;
+                                    }
+                                } else {
+                                    # check and see if any are done...
+                                    my $finished = 0;
+                                    foreach my $run ($s->can_read(1)) {
+                                        my ($status, $seqno, $info) = <$run> =~ /^([A-Z]+)\s*:\s*\[([A-Z0-9]+)\]\s*(.+)[\r\n]*$/o;
+                                        chomp($info);
+
+                                        # now a function call..
+                                        reap_process($run, $status, $seqno, $info) if ($status && $seqno);
+
+                                        ++$finished;
+                                    }
+
+                                    if ($finished) {
+                                        # we can start the process - but make sure we aren't already running one for this
+                                        if ($entry_is_running{$entry->get_value('seqno')}) {
+                                            # this entry is already running. - skip out of the until() for this pass.
+                                            last;
+                                        } elsif ($uid_is_running{$entry->get_value('uniqueid')}) { 
+                                            # this unique id is already running. - skip out of the until() for this pass
+                                            last;
+                                        } else {
+                                            my $qh_method = uc($queue . "_handler");
+                                            my $qh = $lfy->c->$qh_method;
+                                            my $run;
+                                            if ($qh) {
+                                                # queue handler...
+                                                open($run, '-|', $qh . " " . $entry->get_value('LeafyDfromFile')) or warn "Can't run $qh: $!";
+                                            } else {
+                                                # default handler...
+                                                open($run, '-|', $dh . " " . $entry->get_value('LeafyDfromFile')) or warn "Can't run $dh: $!";
+                                            }      
+                                            $s->add($run);
+                                            $lfy->log("Starting dispatch handler for queue $queue. Sequence Number: " . $entry->get_value('seqno'));
+                                            $entry_is_running{$entry->get_value('seqno')} = $queue;
+                                            $file_is_running{$entry->get_value('seqno')} = $entry->get_value('LeafyDfromFile');
+                                            $uid_is_running{$entry->get_value('uniqueid')} = $queue;
+                                            $started = 1;
+                                        }
+                                    } else {
+                                        # we can't start any more.
+                                        my $sleep_time = $gci / 4;
+
+                                        for (my $time_slept = 0; $time_slept <= $sleep_time; $time_slept++) {
+                                            # this might take a second... but probably not
+                                            foreach my $run ($s->can_read(1)) {
+                                                my ($status, $seqno, $info) = <$run> =~ /^([A-Z]+)\s*:\s*\[([A-Z0-9]+)\]\s*(.+)[\r\n]*$/o;
+                                                chomp($info);
+
+                                                # now a function call..
+                                                reap_process($run, $status, $seqno, $info) if ($status && $seqno);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    $queue_last_run{$queue} = time; 
+                }
+            } else {
+                # make sure we re-run immediately!
+                $queue_last_run{$queue} = (time - 28800);
+                $pre_time -= ($gci + 1);
+                next;
+            }
+        }
+        if ($lfy->c->CACHE_BYTECODE) {
+            # always sleep here if we're a single proc.
+            my $time_taken = (time - $pre_time);
+            # if our check interval is greater than the time we've taken to do the previous check...
+            if ($time_taken < $gci) {
+                # sleep the difference!
+                sleep ($gci - $time_taken);
+            }
+        }
+
+        unless ($lfy->c->CACHE_BYTECODE) {
+            # check and see if any are done!
+            foreach my $run ($s->can_read(1)) {
+                my ($status, $seqno, $info) = <$run> =~ /^([A-Z]+)\s*:\s*\[([A-Z0-9]+)\]\s*(.+)[\r\n]*$/o;
+                chomp($info);
+
+                # now a function call..
+                reap_process($run, $status, $seqno, $info)
+            }
+            # rather than sleep, we should check for finishing processes so we can update the status
+            my $sleep_time = $gci - (time - $pre_time);
+
+            # this block appears thrice.. i'm going to copy and paste hell.
+            for (my $time_slept = 0; $time_slept <= $sleep_time; $time_slept++) {
+                # this takes 1 second... (cos of the timeout)
+
+                # unless we have anything to check, just sleep here.
+                unless (scalar($s->handles) > 0) {
+                    sleep 1;
+                }
+
+                my $hres_start = Time::HiRes::time();
+                foreach my $run ($s->can_read(1)) {
+                    my ($status, $seqno, $info) = <$run> =~ /^([A-Z]+)\s*:\s*\[([A-Z0-9]+)\]\s*(.+)[\r\n]*$/o;
+                    chomp($info);
+
+                    # now a function call..
+                    reap_process($run, $status, $seqno, $info) if ($status && $seqno);
+
+                    my $hres_delta = Time::HiRes::time() - $hres_start;
+                    # sleep the difference of the second.
+                    if ($hres_delta > 0) {
+                        Time::HiRes::sleep($hres_delta);
+                    }
+                }
+            }
+        }
+    }
+}
+
+sub reap_process {
+    my ($run, $status, $seqno, $info) = @_;
+
+    # always rely on the index, as the subhandlers may have moved shit around.
+    my $finished_entry = LeafyWeb::LeafyD::Entry->new($seqno);
+
+    return unless $finished_entry;
+
+    # set the status!
+    $finished_entry->set_status("records_processed", $finished_entry->get_status("records_processed") + 1);
+
+    my $uid = $finished_entry->get_value('uniqueid');
+
+    # log the return...
+    $lfy->log("Dispatch handler for queue " . $entry_is_running{$seqno} . " came back.  Sequence Number: " .
+        $seqno . " Status: $status");
+
+    if ($status eq "PASSED") {
+        # we're good! - lets move it to the TO_LDAP queue
+        if ($finished_entry->from_file =~ /completed/) {
+            $finished_entry->add_md(completedInQueue    =>      $entry_is_running{$seqno});
+        } else {
+            $finished_entry->requeue($lfy->c->DEFAULT_DEST_QUEUE);
+            $lfy->log("Moved " . $finished_entry->get_value('seqno') . " to the default destination queue! (" . $lfy->c->DEFAULT_DEST_QUEUE . ")");
+        }
+    } elsif ($status eq "QUEUED") {
+        $lfy->log("Entry " . $finished_entry->get_value('seqno') . " queued for future processing $info");
+    } elsif ($status eq "FAILED") {
+        $lfy->error_log("Entry " . $finished_entry->get_value('seqno') . " failed processing $info");
+        $finished_entry->failed;
+    } elsif ($status eq "REQUEUED") {
+        ($uid) = $info =~ /unique id (.+) requeued/o;
+    }
+
+    # finish up
+    unless ($lfy->c->CACHE_BYTECODE) {
+        $s->remove($run);
+        close($run);
+    }
+
+    # signify that this entry is no longer running.
+    delete($entry_is_running{$seqno});
+    delete($file_is_running{$seqno});
+    delete($uid_is_running{$uid});
+}
+
+# call the handler
+sub call_handler {
+    my ($handler, @ARGV) = @_;
+    my $sub = get_handler($handler);
+    if ($sub) {
+        my $return;
+
+        # instantiate this entry before passing it to the handler in @ARGV.
+        #my $entry = LeafyWeb::LeafyD::Entry->new($file_name);
+        #@ARGV = ($file_name, $entry);
+
+        eval {
+            $return = $sub->(@ARGV);
+        };
+
+        if ($@) {
+            $lfy->error_log("Caught fatal error in $handler: $@");
+            print "Caught fatal error in $handler: $@\n" if $debug;
+            return "FAILED:$@";
+        } else {
+            return $return;
+        }
+
+    } else {
+        print "can't call $handler, get_handler() returned undef!\n";
+    }
+}
+
+# get the handler
+sub get_handler {
+    my ($handler) = @_;
+    if (-e $handler) {
+        my @stat = stat($handler);
+        if (exists($bcode->{$handler})) {
+            # we're using a cached version.
+            if ($bcode->{$handler}->{mtime} < $stat[9]) {
+                # we have an expire cache!
+                $lfy->error_log("$handler has a newer mtime! Recaching!");
+                $bcode->{$handler}->{bcode} = load_handler($handler);
+                $bcode->{$handler}->{mtime} = $stat[9];
+            }
+        } else {
+            # we don't have a cache yet.
+            $bcode->{$handler}->{bcode} = load_handler($handler);
+            $bcode->{$handler}->{mtime} = $stat[9];
+        }
+    }
+
+    # return the subref.
+    return $bcode->{$handler}->{bcode};
+}
+
+# load a handler
+sub load_handler {
+    my ($handler) = @_;
+
+    my $code;
+    # slurp in the code.
+    if (-e $handler) {
+        my $fh;
+        open ($fh, '<', $handler);
+        local $/;
+        $code = <$fh>;
+        close ($fh);
+    } else {
+        $lfy->error_log("couldn't load handler $handler.");
+        return undef;
+    }
+
+    my $sub;
+
+    $code =~ s/^\#\![a-zA-Z0-9\_\/]+\n//g;
+    $code = 'my (@ARGV) = @_;' . "\n" . $code;
+
+    # turn the prints into returns..
+    $code =~ s/print "/return "/g;
+
+    # get rid of the exits.. so the process doesn't get shut down..
+    $code =~ s/exit/return/g;
+
+    # compile the code...
+    eval '$sub = sub { ' . $code . ' };';
+
+    if ($@) {
+        warn "Error compiling handler $handler: $@\n";
+        $lfy->error_log("Error compiling handler $handler: $@");
+    } else {
+        # return the compiled code.
+        return $sub;
+    }
+}
+
+sub done {
+    $stop_waiting = 1;
+}
+
+sub reload_config {
+    delete($lfy->{config_object});
+}
+
+sub reload_data {
+    print "[leafyd]: $$ reloading data.\n" if $debug;
+    $lfy->save_uid_db;
+    $lfy->save_seqno_db;
+
+    $lfy->s->{leafyd_status} = "WRITEOUT_WAIT (send signal USR2 to stop waiting!)";
+    $lfy->save_status;
+
+    my $time_waited = 0;
+    while ($stop_waiting == 0) {
+        last if $time_waited > $lfy->c->MAX_DATABASE_WRITEOUT_WAIT;
+        sleep $lfy->c->DATABASE_WRITEOUT_WAIT;
+        $time_waited += $lfy->c->DATABASE_WRITEOUT_WAIT;
+    }
+
+    $stop_waiting = 0;
+    print "[leafyd]: $$ done reloading data.\n" if $debug;
+    $lfy->error_log("$$ done reloading data.");
+    $lfy->s->{leafyd_status} = "NORMAL";
+    $lfy->save_status;
+}
+
+sub shutdown {
+    $lfy->s->{leafyd_status} = "SHUTDOWN";
+    $lfy->save_status;
+
+    $lfy->save_uid_db;
+    $lfy->save_seqno_db;
+
+    print "[leafyd]: $$ shut down.\n";
+    exit();
+}

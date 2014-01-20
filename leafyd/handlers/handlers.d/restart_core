@@ -1,0 +1,49 @@
+#!/usr/bin/env perl
+
+use LeafyWeb::LeafyD::Entry;
+use LeafyWeb::LeafyD::HandlerRegistry;
+
+# clean up!
+use strict;
+
+my $file_name = $ARGV[0];
+
+# make sure we have a file name
+unless ($file_name) {
+    print "FAILED:no file name specified!\n";
+    exit();
+}
+
+
+# create the entry object for this piece of data.
+my $entry;
+# catch errors
+eval {
+    $entry = LeafyWeb::LeafyD::Entry->new($file_name);
+};
+
+if (my $error = $@) {
+    if ($error =~ /[\r\n]+$/) {
+        print "FAILED:entry creation error $error";
+    } else {
+        print "FAILED:entry creation error $error\n";
+    }
+    exit();
+}
+
+#
+# real handler starts here
+#
+
+use LeafyWeb::Site;
+use LeafyWeb::Server;
+my $site = LeafyWeb::Site->new($entry->get_value('site'));
+
+if ($site) {
+    my @restarted = LeafyWeb::Server->new('core')->restart;
+    $entry->set_md(restarted      =>      \@restarted);
+    print "PASSED:restarted LeafyCore for " . $site->site_name . "\n";
+} else {
+    print "FAILED:couldn't find a site/location in the restart request\n";
+}
+

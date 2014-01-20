@@ -1,0 +1,6 @@
+#!/usr/bin/env perl
+
+use LeafyWeb::Server;
+
+LeafyWeb::Server->new('core')->start(undef, undef, 1);
+

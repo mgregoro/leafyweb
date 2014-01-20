@@ -1,0 +1,21 @@
+#!/usr/bin/env perl
+
+unless ($ARGV[0]) {
+    die "Usage: running <site name>\n";
+}
+
+my ($site, $location) = parse_uri($ARGV[0]);
+
+use LeafyWeb::Site;
+print LeafyWeb::Site->new($site)->is_running($location, 1) . "\n";
+
+# parse dat uri
+sub parse_uri {
+    my ($uri) = @_;
+    if ($uri =~ /^http[s]?:\/\/([^\/]+)(.*?)\/*$/) {
+        return ($1, $2);
+    } elsif ("http://$uri" =~ /^http[s]?:\/\/([^\/]+)(.*?)\/*$/) {
+        return ($1, $2);
+    }
+    return undef;
+}

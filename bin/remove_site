@@ -1,0 +1,19 @@
+#!/usr/bin/env perl
+
+use File::Path;
+use Getopt::Std;
+use LeafyWeb::Site;
+
+my $opts = {};
+getopts('vr', $opts);
+unless ($ARGV[0]) {
+    die "Usage: remove_site <site_name>\n";
+}
+
+my $site = LeafyWeb::Site->new($ARGV[0]);
+
+$site->deconfigure($opts->{v});
+
+if ($opts{r}) {
+    rmtree($site->path);
+}

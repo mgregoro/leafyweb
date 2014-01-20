@@ -1,0 +1,102 @@
+#!/usr/bin/env perl
+
+use LeafyWeb::LeafyD::Entry;
+use LeafyWeb::LeafyD::HandlerRegistry;
+
+# clean up!
+use strict;
+
+my $file_name = $ARGV[0];
+
+# make sure we have a file name
+unless ($file_name) {
+    print "FAILED:no file name specified!\n";
+    exit();
+}
+
+
+# create the entry object for this piece of data.
+my $entry;
+# catch errors
+eval {
+    $entry = LeafyWeb::LeafyD::Entry->new($file_name);
+};
+
+if (my $error = $@) {
+    if ($error =~ /[\r\n]+$/) {
+        print "FAILED:entry creation error $error";
+    } else {
+        print "FAILED:entry creation error $error\n";
+    }
+    exit();
+}
+
+#
+# real handler starts here
+#
+
+use LeafyWeb;
+use LeafyWeb::Site;
+use Digest::MD5;
+
+my $lfy = new LeafyWeb;
+my $site = LeafyWeb::Site->new($entry->get_value('site'));
+my $dbh = $lfy->open_db;
+
+if ($site) {
+    my $config_file = $site->config_file;
+    my $conf_md5 = md5_file($config_file);
+    my $db_md5 = md5_db($site->site_name);
+
+    if ($conf_md5 eq $db_md5) {
+        print "PASSED:reconfiguration not necessary, md5 sums match.\n";
+    } else {
+        my ($pass, $error) = $site->check_config;
+        if ($entry->get_md('configCheckPassed')) {
+            $site->configure;
+            $entry->fork_to('restart_core');
+            $entry->set_md('coreRestartScheduled'           =>          'TRUE');
+            set_md5($site->site_name, $conf_md5);
+            print "PASSED:" . $site->site_name . " reconfigured!\n";
+        } else {
+            print "FAILED:Config Check Failed\n";
+        }
+    }
+} else {
+    print "FAILED:can't find site " . $entry->get_value('site') . "\n";
+}
+
+sub md5_file {
+    my ($file) = @_;
+    my $md5 = Digest::MD5->new;
+    open(CONF, '<', $file) or warn "Can't open file $file: $!\n";
+    {   
+        local $/;
+        $md5->add(<CONF>);
+    }
+    close(CONF);
+    return $md5->hexdigest;
+}
+
+sub set_md5 {
+    my ($site, $md5) = @_;
+    my $sth = $dbh->prepare(q/
+        INSERT OR REPLACE into site_config 
+            (site, md5_sum, modify_time)
+        VALUES
+            (?, ?, ?)
+        /
+    );
+    $sth->execute($site, $md5, time);
+}
+
+sub md5_db {
+    my ($site) = @_;
+    my $sth = $dbh->prepare(q/
+        SELECT md5_sum from site_config where site = ?
+        /
+    );
+    $sth->execute($site);
+    my $ar = $sth->fetchrow_arrayref;
+    return $$ar[0];
+}

@@ -1,0 +1,9 @@
+#!/usr/bin/env perl
+
+unless ($ARGV[0]) {
+    die "Usage: stop_site <site name>\n";
+}
+
+use LeafyWeb::Site;
+LeafyWeb::Site->new($ARGV[0])->stop(1);
+

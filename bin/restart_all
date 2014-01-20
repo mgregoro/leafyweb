@@ -1,0 +1,24 @@
+#!/usr/bin/env perl
+
+use Time::HiRes qw(time);
+use LeafyWeb::Site;
+use LeafyWeb::Server;
+use LeafyWeb;
+my $lfy = LeafyWeb->new();
+
+# get the start time :)
+my $start_time = time;
+
+my ($i, $u) = (0, 0);
+
+foreach my $host ($lfy->list_configed_sites) {
+    my $site = LeafyWeb::Site->new($host);
+    $site->restart;
+    $u++;
+    $i++;
+}
+
+LeafyWeb::Server->new('core')->restart;
+
+print "Scanned $i and restarted $u site(s) in " . sprintf('%.2f', time - $start_time) . " seconds.\n";
+

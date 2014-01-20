@@ -1,0 +1,104 @@
+#!/usr/bin/env perl
+
+use YAML::Syck;
+
+my $uri = $ARGV[0];
+my $command = join(' ', @ARGV[1..$#ARGV]);
+
+my ($site, $location) = parse_uri($uri);
+
+unless ($site) {
+    ($site, $location) = parse_uri("http://" . $uri);
+}
+
+die "[error] can't resolve uri $uri to a site!\n" unless $site;
+
+# get the config dir...
+my $file = '/mg2root/web/' . $site . '/conf/' . $site . '.yaml';
+if (-w $file) {
+    my $yaml = LoadFile($file);
+    my $to_change = parse_command($command);
+    if (scalar(keys %$to_change) > 0) {
+        if ($location) {
+            # we're operating in location context.
+            $to_change->{path} = $location;
+            if (exists($yaml->{locations})) {
+                if (exists($yaml->{locations}->{$location})) {
+                    print "[info] changing existing location $location\n";
+                    foreach my $key (keys %$to_change) {
+                        $yaml->{locations}->{$location}->{$key} = $to_change->{$key};
+                        print "   - set $key to '" . $to_change->{$key} . "'\n";
+                    }
+                } else {
+                    print "[info] adding new location $location\n";
+                    $yaml->{locations}->{$location} = $to_change;
+                    foreach my $key (keys %$to_change) {
+                        print "   - set $key to '" . $to_change->{$key} . "'\n";
+                    }
+                }
+            } else {
+                print "[info] adding new location $location\n";
+                $yaml->{locations}->{$location} = $to_change;
+                foreach my $key (keys %$to_change) {
+                    print "   - set $key to '" . $to_change->{$key} . "'\n";
+                }
+            }
+        } else {
+            # site context
+            print "[info] changing site-configuration\n";
+            foreach my $key (keys %$to_change) {
+                # pls this is reserved don't be gay.
+                next if $key eq "locations";
+                $yaml->{$key} = $to_change->{$key};
+                print "   - set $key to '" . $to_change->{$key} . "'\n";
+            }
+        }
+
+        # its merged here ok?
+        DumpFile($file, $yaml);
+        print <<"EOF";
+
+ *** To validate your config, please run:
+       'leafyctl check_config $uri' 
+EOF
+    } else {
+        # read-only...
+        print "[info] printing config\n";
+        if ($location) {
+            if (exists($yaml->{locations}->{$location})) {
+                foreach my $key (keys %{$yaml->{locations}->{$location}}) {
+                    print "   - $key: " . $yaml->{locations}->{$location}->{$key} . "\n";
+                }
+            }
+        } else {
+            foreach my $key (keys %$yaml) {
+                next if $key eq "locations";
+                print "   - $key: " . $yaml->{$key} . "\n";
+            }
+        }
+    }
+} else {
+    die "[error] $file is not writable, or does not exist\n";
+}
+
+sub parse_command {
+    my ($data) = @_;
+    my $to_change = {};
+    foreach my $attr (split(/-+/, $data)) {
+        next unless $attr;
+        if ($attr =~ /^(\w+)\=(.+?)\s*$/) {
+            $to_change->{$1} = $2;
+        }
+    }
+    return $to_change;
+}
+
+# parse dat uri
+sub parse_uri {
+    my ($uri) = @_;
+    if ($uri =~ /^http[s]?:\/\/([^\/]+)(.*?)\/*$/) {
+        return ($1, $2);
+    }
+    return undef;
+}
+

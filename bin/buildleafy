@@ -1,0 +1,117 @@
+#!/usr/bin/env perl
+
+use LeafyWeb;
+use LeafyWeb::Site;
+use LeafyWeb::Server;
+use Digest::MD5;
+use Time::HiRes;
+
+# get the start time :)
+my $start_time = Time::HiRes::time();
+
+# do not restart core unless we has to!
+my $restart_core = 0;
+
+my $lfy = LeafyWeb->new();
+my $dbh = $lfy->open_db;
+
+my @found_sites;
+my ($i, $u) = (0, 0);
+opendir(SITEROOT, $lfy->c->LEAFY_SITE_ROOT);
+while (my $host = readdir(SITEROOT)) {
+    ++$i;
+    my $conf_file = $lfy->c->LEAFY_SITE_ROOT . "/$host/conf/$host.yaml";
+
+    if (-e $conf_file) {
+        push(@found_sites, $host);
+        my $conf_md5 = md5_file($conf_file);
+        my $db_md5 = md5_db($host);
+        unless ($conf_md5 eq $db_md5) {
+            if ($db_md5) {
+                print ":: ($host) updated config!\n";
+            } else {
+                print "++ ($host) new config!\n";
+            }
+
+            my $site = LeafyWeb::Site->new($host);
+
+            my ($pass, $error) = $site->check_config();
+
+            #if ($pass) {
+                $site->configure;
+                ++$u;
+                set_md5($host, $conf_md5);
+                $restart_core = 1;
+                #} else {
+                #print "EE ($host) not merging due to syntax error in $conf_file!\n";
+                #}
+        }
+    }
+}
+closedir(SITEROOT);
+
+foreach my $site (list_sites()) {
+    my $still_listed = 0;
+    foreach my $listed_site (@found_sites) {
+        if ($site eq $listed_site) {
+            $still_listed = 1;
+            last;
+        }
+    }
+    if (!$still_listed) {
+        print "-- ($host) no longer exists.  unmerging!\n";
+        LeafyWeb::Site->new($site)->deconfigure;
+    }
+}
+
+
+print "Scanned $i and updated $u site(s) in " . sprintf('%.2f', Time::HiRes::time() - $start_time) . " seconds.\n";
+
+# create table site_config (site_configid integer primary key autoincrement, site text, md5_sum text, modify_time integer);
+
+sub list_sites {
+    my $sth = $dbh->prepare(q/
+        select site from site_config
+    /);
+    $sth->execute();
+    my @sites;
+    while (my $ar = $sth->fetchrow_arrayref) {
+        push(@sites, $$ar[0]);
+    }
+    return (@sites);
+}
+
+sub md5_file {
+    my ($file) = @_;
+    my $md5 = Digest::MD5->new;
+    open(CONF, '<', $file) or warn "Can't open file $file: $!\n";
+    {
+        local $/;
+        $md5->add(<CONF>);
+    }
+    close(CONF);
+    return $md5->hexdigest;
+}
+
+sub set_md5 {
+    my ($site, $md5) = @_;
+    my $sth = $dbh->prepare(q/
+        INSERT OR REPLACE into site_config 
+            (site, md5_sum, modify_time)
+        VALUES
+            (?, ?, ?)
+        /
+    );
+    $sth->execute($site, $md5, time);
+}
+
+sub md5_db {
+    my ($site) = @_;
+    my $sth = $dbh->prepare(q/
+        SELECT md5_sum from site_config where site = ?
+        /
+    );
+    $sth->execute($site);
+    my $ar = $sth->fetchrow_arrayref;
+    return $$ar[0];
+}

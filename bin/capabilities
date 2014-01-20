@@ -1,0 +1,24 @@
+#!/usr/bin/env perl
+
+use LeafyWeb;
+use LeafyWeb::Server;
+my $lfy = new LeafyWeb;
+
+print "LeafyWeb v" . $lfy->lfy_version . "\n(c) 2008 the mg2 organization, All rights reserved\n";
+
+print "============================\n";
+print "   Server Capabilities\n";
+print "============================\n";
+
+foreach my $server ($lfy->installed_servers) {
+    my $sobj = LeafyWeb::Server->new($server);
+
+    print "$server ", $sobj->is_core ? "[CORE]\n" : "\n";
+    print $sobj->description . "\n";
+    print "also known as: " . join(', ', @{$sobj->aka}) . "\n";
+    print "built on: " . localtime($sobj->build_timestamp) . "\n";
+    print "maintained by: " . $sobj->maintainer . "\n";
+
+    print "\n";
+
+}

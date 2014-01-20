@@ -1,0 +1,64 @@
+#!/usr/bin/env perl
+
+use Time::HiRes qw(time);
+use LeafyWeb;
+my $lfy = LeafyWeb->new();
+
+# get the start time :)
+my $start_time = time;
+
+my ($i, $u) = (0, 0);
+opendir(SITEROOT, $lfy->c->LEAFY_SITE_ROOT);
+while (my $host = readdir(SITEROOT)) {
+    next if $host eq "." or $host eq "..";
+    ++$i;
+    my $conf_file = $lfy->c->LEAFY_SITE_ROOT . "/$host/conf/$host.yaml";
+    my $old_file = $lfy->c->LEAFY_SITE_ROOT . "/$host/conf/$host.conf";
+
+    system("chmod 770 " . $lfy->c->LEAFY_SITE_ROOT . "/$host/logs");
+
+    open(OLDFILE, '<', $old_file) or warn "Can't open $old_file: $!\n";
+    my $contents;
+    {
+        $/ = undef;
+        $contents = <OLDFILE>
+    }
+    close(OLDFILE);
+
+    my $owner = getpwuid((stat("$old_file"))[4]);
+
+    # get rid of ServerName, ServerAdmin, and DocumentRoot for cleanliness
+    $contents =~ s/ServerName[^\n]+\n//g;
+    $contents =~ s/ServerAdmin[^\n]+\n//g;
+    $contents =~ s/DocumentRoot[^\n]+\n//g;
+    $contents =~ s/TransferLog[^\n]+\n//g;
+    $contents =~ s/ErrorLog[^\n]+\n//g;
+    $contents =~ s/CustomLog[^\n]+\n//g;
+
+    # whitespace for yaml purposes
+    $contents = "  $contents";
+    $contents =~ s/\n/\n  /g;
+
+    my $yml_file = <<EOYML;
+name: $host
+owner: $owner
+notify: $owner\@mg2.org
+config: |
+$contents
+locations:
+    /:
+        path: /
+        server: mg2
+        notify: $owner\@mg2.org
+        shared: 1
+EOYML
+    unless (-e $conf_file) {
+        open(CONF, '>', $conf_file);
+        print CONF "$yml_file\n";
+        close(CONF);
+    }
+}
+closedir(SITEROOT);
+
+print "Scanned $i and updated $u site(s) in " . sprintf('%.2f', time - $start_time) . " seconds.\n";
+

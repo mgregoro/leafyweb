@@ -1,0 +1,68 @@
+--- 
+cache_bytecode: 'true'
+chunk_size: 50
+default_dest_queue: TO_THE_MOON
+default_document_root: /opt/leafyweb/htdocs
+default_server_group: webserv
+default_server_name: web.mg2.org
+default_server_user: webserv
+global_check_interval: 1
+healthcheck_interval: 300
+installed_leafy_servers: 
+  catalyst: linux_amd64_a22_perl_2.2.9
+  core: linux_amd64_a22_core_2.2.11
+  leafy-core: linux_amd64_a22_core_2.2.11
+  linux_amd64_a13_mg2_1.3.41: linux_amd64_a13_mg2_1.3.41
+  linux_amd64_a22_core_2.2.11: linux_amd64_a22_core_2.2.11
+  linux_amd64_a22_perl_2.2.9: linux_amd64_a22_perl_2.2.9
+  linux_amd64_a22_php_2.2.9: linux_amd64_a22_php_2.2.9
+  linux_amd64_mongrel_rails_1.1.5: linux_amd64_mongrel_rails_1.1.5
+  mg2: linux_amd64_a13_mg2_1.3.41
+  mg2_a13: linux_amd64_a13_mg2_1.3.41
+  mg2_compat: linux_amd64_a13_mg2_1.3.41
+  mod_perl: linux_amd64_a22_perl_2.2.9
+  mongrel: linux_amd64_mongrel_rails_1.1.5
+  perl: linux_amd64_a22_perl_2.2.9
+  php: linux_amd64_a22_php_2.2.9
+  php5: linux_amd64_a22_php_2.2.9
+  php5_a22: linux_amd64_a22_php_2.2.9
+  rails: linux_amd64_mongrel_rails_1.1.5
+  romeo: linux_amd64_a22_perl_2.2.9
+  ror: linux_amd64_mongrel_rails_1.1.5
+leafy_addr: 
+  - 216.150.225.253
+leafy_group: leafyweb
+leafy_http_ports: 
+  - 80
+  - 8080
+leafy_https_ports: 
+  - 443
+leafy_port_range: 30000-40000
+leafy_root: /opt/leafyweb
+leafy_server_root: /opt/leafyweb/servers
+leafy_site_root: /mg2root/web
+leafy_temp: /opt/leafyweb/tmp
+leafy_user: leafyweb
+leafyd_completed_base: /opt/leafyweb/leafyd/completed
+leafyd_default_handler: /opt/leafyweb/leafyd/bin/default_handler.pl
+leafyd_default_handler_nocache: /opt/leafyweb/leafyd/bin/default_handler_nocache.pl
+leafyd_handler_base: /opt/leafyweb/leafyd/handlers
+leafyd_log_base: /opt/leafyweb/leafyd/logs
+leafyd_queue_base: /opt/leafyweb/leafyd/queue
+pid_file: /opt/leafyweb/leafyd/.leafyd.pid
+queues: 
+  - start
+  - stop
+  - restart
+  - start_core
+  - stop_core
+  - restart_core
+  - healthcheck
+  - check_config
+restart_interval: 1
+sloppy_requeueing: 1
+sqlite_db_file: /opt/leafyweb/.leafy_sqlite.db
+start_interval: 1
+stop_interval: 1
+unique_ids: 
+  - site

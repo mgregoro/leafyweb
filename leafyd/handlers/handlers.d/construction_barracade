@@ -1,0 +1,6 @@
+#!/usr/bin/env perl
+
+# run the generic initialization stuff
+do '../handler_includes/init.pl';
+
+print "QUEUED:this event queue is under construction!\n";

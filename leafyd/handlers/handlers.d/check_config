@@ -1,0 +1,56 @@
+#!/usr/bin/env perl
+
+use LeafyWeb::LeafyD::Entry;
+use LeafyWeb::LeafyD::HandlerRegistry;
+
+# clean up!
+use strict;
+
+my $file_name = $ARGV[0];
+
+# make sure we have a file name
+unless ($file_name) {
+    print "FAILED:no file name specified!\n";
+    exit();
+}
+
+
+# create the entry object for this piece of data.
+my $entry;
+# catch errors
+eval {
+    $entry = LeafyWeb::LeafyD::Entry->new($file_name);
+};
+
+if (my $error = $@) {
+    if ($error =~ /[\r\n]+$/) {
+        print "FAILED:entry creation error $error";
+    } else {
+        print "FAILED:entry creation error $error\n";
+    }
+    exit();
+}
+
+#
+# real handler starts here
+#
+
+use LeafyWeb;
+use LeafyWeb::Site;
+use Digest::MD5;
+
+my $lfy = new LeafyWeb;
+my $site = LeafyWeb::Site->new($entry->get_value('site'));
+my $dbh = $lfy->open_db;
+
+if ($site) {
+    my ($pass, $error) = $site->check_config;
+    if ($pass) {
+        $entry->set_md('configCheckPassed'      =>      'TRUE');
+        print "PASSED:Config Check Passed!\n";
+    } else {
+        print "FAILED:Config Check Failed: $error\n";
+    }
+} else {
+    print "FAILED:can't find site " . $entry->get_value('site') . "\n";
+}

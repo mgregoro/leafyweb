@@ -1,0 +1,9 @@
+#!/usr/bin/env perl
+
+use LeafyWeb::Package;
+use Test::More qw(no_plan);
+
+my $lfypkg = LeafyWeb::Package->new(undef, $ARGV[0]);
+print $lfypkg->build_target . "\n";
+$lfypkg->build();
+

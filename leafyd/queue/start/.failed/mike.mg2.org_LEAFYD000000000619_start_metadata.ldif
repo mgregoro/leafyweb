@@ -1,0 +1,11 @@
+
+dn: 
+processingStarted: 20101031233653
+runCount: 1
+start_05checkConfig_Status: FAILED - Config Check Failed: mike.mg2.org/: bash:
+  ./mg2:30034: No such file or directory
+start_05checkConfig_LastRunTime: 20101031233653
+reQueued: start <=> start: FAILED
+failedInQueue: start
+recordFailed: TRUE
+originalQueue: start

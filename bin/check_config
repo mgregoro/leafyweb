@@ -1,0 +1,15 @@
+#!/usr/bin/env perl
+
+unless ($ARGV[0]) {
+    die "Usage: check_config <site name> <location>\n";
+}
+
+use LeafyWeb::Site;
+my ($pass, $error) = LeafyWeb::Site->new($ARGV[0])->check_config($ARGV[1]);;
+
+if ($pass) {
+    print "PASSED\n";
+} else {
+    print "FAILED\n";
+    print "$error";
+}

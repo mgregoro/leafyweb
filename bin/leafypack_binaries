@@ -1,0 +1,6 @@
+#!/usr/bin/env perl
+
+use LeafyWeb::Package;
+
+my $lfypkg = LeafyWeb::Package->new(undef, $ARGV[0], 1);
+$lfypkg->pack_binaries($lfypkg->build_target);
